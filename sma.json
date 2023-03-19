@@ -1,0 +1,16 @@
+{
+    "openhab": {
+        "apikey": "oh.RestAccess.somekey",
+        "IPport": "192.168.XXX.XXX:8080"
+    },
+    "system name": {
+        "name": "My Inverter Farm"
+    },
+    "inverter": {
+        "name": "Name of Inverter",
+        "bluetooth": "00:80:25:XX:XX:XX",
+        "serial": "2130XXXXXX",
+        "password": "XXXXXXXX"
+     }
+    
+}

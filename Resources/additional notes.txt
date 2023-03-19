@@ -1,0 +1,71 @@
+Remote  SSH:
+	https://code.visualstudio.com/docs/remote/ssh-tutorial
+	
+	Install OpenSSH for Windows
+	
+	https://code.visualstudio.com/docs/remote/ssh-tutorial
+	https://learn.microsoft.com/en-gb/windows-server/administration/openssh/openssh_install_firstuse?tabs=gui
+	
+	To connect to a remote computer via SSH: 
+	
+	>> ssh openhabian@192.168.1.11
+	
+    From VS Code install remote development extension
+    From bottom left of VS Code "green section" choose to open a remote  connection 
+    choose SSH: connect to host (first time need to specify host and user and location to open : /home/openhabian/)
+    Enter password 
+
+    Project space is /home/openhabian/BTTEST
+    Copy  project files across and test it runs for example:
+    >> python main.py -v -f ./sma.json
+
+    Install the python executable builder
+    >>pip install pyinstaller
+
+    ==>  WARNING: The scripts pyi-archive_viewer, pyi-bindepend, pyi-grab_version, pyi-makespec, pyi-set_version and pyinstaller
+    are installed in '/home/openhabian/.local/bin' which is not on PATH.
+            Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+
+    Note that  the install  tool is located at /home/openhabian/.local/bin
+    use ls -a to in /home/openhabian/ to see installer files.
+
+    Build the executable, from /home/openhabian/BTTEST
+    >>/home/openhabian/.local/bin/pyinstaller main.py -n openhabsma
+
+    Executable is in the newly created /home/openhabian/BTTEST/dist/openhabsma directory
+    From /BTTEST
+    >>./dist/openhabsma/openhabsma -v -f ./sma.json
+
+    A single file executable can be created  using the pyinstallet --onefile switch
+
+    >>/home/openhabian/.local/bin/pyinstaller --onefile main.py -n openhabsma
+
+    Copy the file from the dist directory  and it  can be run from anywhere
+
+	Depoly in openhab
+	
+	https://www.openhab.org/addons/bindings/exec/
+
+    >>cp ./openhabsma /etc/openhab/scripts/openhabsma
+    >>cp ./sma.json /etc/openhab/scripts/sma.json
+	>>cd ./etc/openhab/scripts/
+	
+	Check it can be run as the correct user 
+	
+	>>sudo -u  openhab /etc/openhab/scripts/openhabsma -s -f /etc/openhab/scripts/sma.json
+	
+	Update the whitelist 
+	
+	>>cd..
+	>>cd misc
+	>>sudo nano exec.whitelist
+		add the following:
+		# SMA SuunyBoy reader
+		/etc/openhab/scripts/openhabsma -s -f /etc/openhab/scripts/sma.json
+		/etc/openhab/scripts/openhabsma -f /etc/openhab/scripts/sma.json
+		
+		
+
+
+
+

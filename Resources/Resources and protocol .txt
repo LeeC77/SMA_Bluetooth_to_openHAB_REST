@@ -1,0 +1,640 @@
+Resources
+
+
+https://github.com/openenergymonitor/emonhub/blob/emon-pi/src/smalibrary/SMASolar_library.py
+https://telecnatron.com/articles/Monitoring-A-Sunny-Boy-4000tl-Solar-Inverter-Via-Its-Bluetooth-Interface./index.html
+https://github.com/SBFspot/SBFspot/tree/master/SBFspot
+https://github.com/sma-bluetooth/sma-bluetooth
+https://github.com/ardexa/sma-bluetooth-inverters
+https://community.openhab.org/t/example-on-how-to-access-data-of-a-sunny-boy-sma-solar-inverter/50963
+
+
+
+
+_______________________________________________________________________
+Understanding the SMA bluetooth protocol
+http://blog.jamesball.co.uk/2013/02/sma-bluetooth-protocol-level-1-packet.html
+In my quest to create a Mac OS X program to read data from an SMA Sunny Boy inverter I've had to learn a lot about the protocol and the meaning of the different bytes. I want to record much of that here for use by others (and hopefully improvement if you can work out what some of the unidentified sections are)
+
+If you Google for information there are various implementations of programs to read the data (mainly in C for Linux) but very little detail of the protocol itself. Most programs use an input file, based on packet sniffing an exchange between an inverter and a Sunny Beam, to look for key requests and make the 'correct' response rather than understanding the protocol.
+
+There are two 'levels' to the protocol and this distinction is not well documented online. I also failed to find tabled information on the bytes of the protocol, possible values and meaning.
+
+So, this is what I know.
+
+Much of the protocol is clearly based on SMA Net which is published. All transfers are little endian.
+Connecting to the inverter
+When you connect to the inverter you are talking in 'Level 1' (L1) packets. I will create a separate post to detail the full make up of a packet but you have: header, source address, destination address, command and data.
+
+When you first connect to the inverter you will start receiving L1 packets. The source address is the inverter bluetooth MAC address, the destination address is 00:00:00:00:00:00 with a command 0x0200. The data will be set to <00 04 70 00 02 00 00 00 00 01 00 00 00>. I don't know the meaning of the data here - possibly at least one byte is the Net ID but I'm not sure.
+
+This packet will be sent repeatedly up to 10 times and then the connection will close. To keep the connection open you need to return the correct response. This response is to return the data you received back to the inverter. Source address should be 00:00:00:00:00:00, destination address is the inverter MAC address and data is <00 04 70 00 02 00 00 00 00 01 00 00 00>.
+
+If the inverter accepts your response you will receive three packets.
+
+1) From the inverter MAC to 00:00:00:00:00:00, command 0x0a00 with the data set to the inverter MAC, 0x01, then your computer MAC.
+
+2) From the inverter MAC to 00:00:00:00:00:00, command 0x0c00 with the data set to 0x0200
+
+3) From the inverter MAC to 00:00:00:00:00:00, command 0x0500 with the data set to the inverter MAC, 0x0101 then your computer MAC, 0x0201
+
+You are now connected and can send your own commands and receive answers.
+
+The easiest is a request for the bluetooth signal strength.
+
+You create a packet with the header, your computer MAC, inverter MAC, command 0x0300 and the data set to 0x0500.
+
+0x0300 is a command to say that we're making a request for something. That something is 0x0500 (bluetooth strength).
+
+In response you should receive a packet.
+
+It will have a header and come from the inverter MAC to your computer MAC. The command will be 0x0400 (telling us this is a response to our request) will the data set to <05 00 00 00 a5 00>.
+
+The initial 0x0500 is telling us that it's bluetooth strength. I think the next two bytes are padding. Then the next byte is the value (it could be two bytes but I don't think so). So 0xa500 is 165. It's a single byte so values go from 0 to 255. To get a % 165/256 * 100. Our signal strength is 64.5%. Not bad.
+
+If you receive a packet with the command bytes set to 0x0700 I think this means there was an error. I've only received it when I've made a mistake. The data is set to whatever you sent.
+The header
+To send a packet you have to put on the correct header and it includes the packet length and a check digit. An example: <7e 14 00 6a>
+
+The header always starts 0x7e. If you don't have that at the start then something is wrong and you shouldn't process the packet any more.
+
+The next byte is the packet length in bytes. It includes every byte of the packet 0x7e and on.
+
+The next byte is always 0x00. Or has been in every packet I've looked at.
+
+The fourth byte is the check digit. It is calculated by taking the XOR of the three other bytes of the header. so 0x7e ^ 0x14 ^ 0x00 = 0x6a
+The commands
+The ones we know about are:
+•	0x0100 - Level 2 packet / end of Level 2 packet
+•	0x0200 - Ping from inverter to log in
+•	0x0300 - make a request
+•	0x0400 - receive result of request
+•	0x0500 - part of log in process
+•	0x0700 - error
+•	0x0800 - Level 2 part packet
+•	0x0a00 - part of log in process
+•	0x0c00 - part of log in process
+The missing values may well be valid commands but I've not seen them when sniffing exchanges between Sunny Explorer and the inverter or as I've sent packets.
+Level 2 packets
+Level 2 (L2) packets (which I'll look at in more detail in a later post) are transferred within the data portion of L1 packets. There is a maximum length of an L1 packet - the longest I've seen is 0x6d. L2 packets can easily be bigger than this so they have to be split between multiple L1 packets.
+
+An L1 packet is 18 bytes long before data so any L2 packet larger than 91 bytes must be split. This is done using commands 0x0100 and 0x0800.
+
+If an L2 packet is shorter than the maximum length then it is sent as the data part of one L1 packet with command 0x0100.
+
+If an L2 packet is longer than the maximum length then it is split at the maximum length. If the L2 packet is 100 bytes then you'll have a 91 byte section and a 9 byte section. This is sent as two L1 packets.
+1.	A packet with command 0x0800 and 91 bytes.
+2.	A packet with command 0x0100 and 9 bytes.
+The full L2 packet is recreated at the destination by assembling all 0x0800 command packets and the 0x0100 packet. There may be any number of 0x0800 packets.
+
+SMA Bluetooth Protocol - Level 1 Packet Format
+SMA Bluetooth Level 1 Packet Format
+Please see my other post for discussion of the use of the packets - this post is just to record the specific details of the packet layout.
+
+SMA Bluetooth Level 1 Protocol Format
+Byte #	Name	Description	Possible values
+1	Start byte	Indicates the start of a packet.	0x7e
+2	Packet length	Length of the packet in bytes. All bytes including start byte. Minimum length is 18 bytes and maximum 91 bytes.	0x12 to 0x6d
+3	Unknown	This is always 0x00. It's function is unknown.	0x00
+4	Check digit	Value of start byte, packet length and the unknown byte XORed together.	Any
+5-10	Source MAC address	MAC address of the bluetooth adaptor of the source machine. Little endian so a MAC of 00:26:08:c0:0f:02 is sent as 0x020fc0082600	Valid MAC address
+11-16	Destination MAC address	MAC address of the bluetooth adaptor of the destination machine. Little endian so a MAC of 00:26:08:c0:0f:02 is sent as 0x020fc0082600. May be 00:00:00:00:00:00 for broadcast.	Valid MAC address
+17-18	Command	Command being sent.	•	0x0100 - L2 packet/L2 packet end
+•	0x0200 - Ping from inverter for log in
+•	0x0300 - Request for information
+•	0x0400 - Response to request
+•	0x0500 - Part of log in
+•	0x0700 - Error
+•	0x0800 - L2 part packet
+•	0x0a00 - Part of log in
+•	0x0c00 - Part of log in
+19-(91)	Data	Data to be sent with packet. Varies by command. Length is variable up to 91 bytes.	Valid data
+
+Command (0x0300) Possible Request Values
+Request	Name	Description	Response
+0x0100	????	Sent with data 0x01	0x000001
+0x0200	????	Sent with no data	0x000020fd
+0x0500	Bluetooth signal strength	Sent with no data	0x0000XX00 where XX is bluetooth signal strength from 0 to 255.
+0x0a00	????	Sent with data 0xac	0x0000ac
+
+
+
+Please see my other post for discussion of the use of the packets - this post is just to record the specific details of the packet layout.
+
+SMA Bluetooth Level 2 Protocol Format
+Byte #	Name	Description	Possible values
+1	Head	Indicates the start of a packet. Always 0x7e.	0x7e
+2-5	Header	Indicates the start of a packet. 0x6065 indicates that this is SMA Net2+.	0xff036065
+6	Packet length	Length of the packet in 4-byte words - length * 4 = bytes. Doesn't include header, FCS or 0x73 footer.	0x07 up
+7	Destination address header	Function unknown.
+0xa0 is used when the address is a broadcast one.
+0xe0 is used when destination is inverter.
+0x80, 0xc0 used when destination is computer.	0x80, 0xa0, 0xc0, 0xe0
+8-13	Destination address	6-byte address. It seems to be one byte value, one byte 0 then serial number (not MAC address) of device.
+In the example the serial number is 2001787857 which translates to 0xd1db5077.	Example: 0x6300d1db5077
+14	Padding	Always 0x00.	0x00
+15	Source address header	Function unknown. Not sure how these are split. Some only seem to be used when destination is a broadcast address.	0x00, 0x01, 0x03, 0x05, 0xa0, 0xe0
+16-21	Source address	6-byte address. It seems to be one byte value, one byte 0 then serial number (not MAC address) of device.
+In the example the serial number is 2001787857 which translates to 0xd1db5077.	Example: 0x6300d1db5077
+
+22-23	Mystery 1	Two bytes of unknown function. Almost always set to 0x0000. Other values only seen when command is 0xfdff.	0x00 (occasionally 0x01, 0x03 or 0x05)
+24	Acknowledge	This is either 0x00 (majority) or 0x15. 0x15 only comes from inverter and seems to be some form of acknowledgement.	0x00 or 0x15
+25	Mystery 2	Unknown, always 0x00	0x00
+26	Telegram number	For very long responses the inverter may choose to send multiple packets. If so it will set a telegram number. If this is 0x00 then the response is one packet or this is the last packet. So 0x06 means there are seven packets in the response.
+(I think it is possible to send more than 256 packets - you count down to 0x01 then go back up to 0xff - only sending 0x00 for the last packet.)	0x00 to 0xff
+27	Mystery 3	Unknown, always 0x00	0x00
+28	Counter	Each packet sent includes a counter - the response will have the same counter value to allow you to know which incoming packets correspond to your request. After 0xff return to 0x00 and continue.	0x00 to 0xff then 0x00…
+29	Command Group 1	I think this is an indicator that the current packet is the first in a command or response. This value is always 0x80 unless the response is over multiple packets in which case it will be 0x80 for the first packet and 0x00 for all the remaining packets.
+(Update: I have also seen 0x81 and 0x01 and wasn't sure the purpose. I've now checked. It seems that once the counter goes past 0xff then Command Group 1 has one added. I haven't sniffed for long enough to see if it goes to 0x82, 0x83 etc each time the counter rolls over)	0x80 or 0x00 (0x81 and 0x01 after counter goes round past 0xff)
+30	Command Group 2	I think this is mainly used to indicate if the packet is a request or a response. It is sent from the computer as 0x00 and returned with data as 0x01.
+Other values are seen, rarely, and seem to be related to specific commands (0xfdff and 0x00f0).	0x00 and 0x01
+(0xc0, 0xd0 and 0xe0 seen with command 0xfdff and 0xa0 with command 0x00f0)
+31	Command Group 3	Not sure of purpose. For normal commands it is aways 0x02. For command 0xfdff it is another value.	0x02.
+(For 0xfdff is is 0x00, 0x01 or 0x04)
+32-33	Command	Two byte command. The data set after the command can change the results significantly. Some require dates but others specific strings. See separate table for command details)	example 0x0070 or 0xfdff
+34+	Data	Data content of the packet. Format of data varies by comand.	Series of bytes.
+Last-but-3 bytes (2)	FCS	Two bytes of the calculated FCS value. Standard PPP FCS calculation. See SMA Data specification for details. Calculated on all bytes from Header to Data inclusive.	Two bytes
+Last byte	Footer	Terminates the packet, always 0x7e.	0x7e
+
+Command Possible Request Values
+Command	Name	Request Data	Response
+0x0000	I am here	8-bytes of 0	None
+0x0051		0x00002000ffff5f00	power now, max power phases 1-3, ac voltage, ac current, grid frequency, 0x1f4a
+0x0054	Totals	0x00002000ffff5f00	Total generated, total today, operating time, feed in time
+0x0058	Unknown	-	Data set in 4-byte chunks.
+1) start frame number
+2) end frame number
+3) Data in 40 byte cycles
+0x0061	Power now	0x00002600ffff2600	Data set in 4-byte chunks.
+1) Start frame number 2) End frame number 3) Data 40 byte cycles, 4-byte type code, 4-byte time stamp, 4-byte value, 4-byte value, 4-byte value, 4-byte value, 4-byte padding. Values in Watts. Four values usually the same. Not sure why repeated.
+0x0061	Max Phase power	0x00004100ffff4100	Data set in 4-byte chunks.
+1) Start frame number
+2) End frame number
+3) Data 28 byte cycles, 4-byte type code, 4-byte time stamp, 4-byte value, 4-byte value, 4-byte value, 4-byte value, 4-byte padding.
+Values in Watts. Four values usually the same. Not sure why repeated - I think the 3rd value is how much is active. I have a single phase system and only Phase 1 has a value for the third position.
+			
+0x0064	Totals	0x00002600ffff2600 or 0x00004600ffff4600	Total generated, total generated today. OR
+Feed in time, operating time.
+0x0068	????	-	-
+0x0070	Request historical yield (by 5 mins)	4-byte unix timestamp for start and 4-byte unix timestamp for end. Data returned between dates. Standard if requesting a day is from 22:00 the day before to 21:59:59 on the day.	Data set in 4-byte chunks. 1) Start frame number 2) End frame number 3) Data 12 byte cycles, 4-byte time stamp, 4-byte value, 4-byte padding. Values in Watt hours.
+0x00f0	Time set	0x006d2300006d2300006d2300000000000200000001000000	-
+0x1070	See 0x0070	This seems to be 0x0070 once the counter has gone round.	-
+0x2063	????	No data returned	-
+0x2070	Request yield (by day)	time stamp start, time stamp end	As 0x0070
+0x4063	????	No data returned	-
+0x8051	????	-	-
+0x8053	DC values	0x00002000ffff5f00	
+Returns DC voltage and DC current. 4-byte chunks.
+1) Start frame number
+2) End frame number
+3) Data 28 byte cycles
+0x8061	????	-	-
+0x8063	DC values	0x00004500ffff4500	Returns DC voltage and DC current. 4-byte chunks.
+1) Start frame number
+2) End frame number
+3) Data 28 byte cycles
+0xf5ff	????	0x00000000ffffffff	0x00000000ffffffff
+0xfdff	????	Part of log in but other uses too. I think it can be used as a keep alive.	
+
+Date Type Codes
+Code	Description	Unit
+0x1e41	Max power phase 1	Watts
+0x1f41	Max power phase 2	Watts
+0x2041	Max power phase 3	Watts
+0x3f26	Power now	Watts
+0x0126	Total generated	Watt hours
+0x2226	Total generated today	Watt hours
+0x4846	AC line voltage phase 1	Volts/100
+0x5046	AC current phase 1	milli Amps
+0x5746	Grid frequency	Hertz/100
+0x2e46	Inverter operating time	Seconds
+0x2f46	Inverter feed-in time	Seconds
+0x1f45	DC voltage	Volts/100
+0x2145	DC current	milli Amps
+0x1f4a	????	?
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+-	-	-
+
+Notes on the protocol for Bluetooth enabled SMA inverters
+=========================================================
+https://github.com/dgibson/python-smadata2
+
+There seem to be two "interesting" protocol layers in the SMA
+bluetooth protocol.  The "outer" protocol is a packet protocol over
+Bluetooth RFCOMM.  It seems mainly to deal with Bluetooth specific
+things - signal levels etc.
+
+Speculation:
+ - Used for communication between the bluetooth adapters, rather than
+   the equipment itself?
+ - e.g. SMA bluetooth repeaters would talk this protocol, then forward
+   the inner frames on to the actual equipment?
+
+Some of the outer protocol frame types encapsulate PPP frames.  All
+PPP frames observed are PPP protocol number 0x6560, which appears to
+be an SMA allocated ID for their control protocol.
+
+Speculation:
+ - Is PPP and the inner protocol used directly over serial when using
+   RS485 instead of Bluetooth connections?
+    - Allows for shared use of RS485 lines, maybe?
+
+Outer protocol
+==============
+
+Packet based protocol over RFCOMM channel 1 over Bluetooth.  The same
+packet format appears to be used in both directions.
+
+
+Packet header
+-------------
+
+Offset		Value
+---------------------
+0		0x7e
+1		length of packet (including header), max 0x70
+2		0x00
+3		check byte, XOR of bytes 0..2 inclusive
+4..9		"From" bluetooth address
+10..15		"To" bluetooth address
+16..17		Packet type (LE16)
+
+18..		Payload (format depends on packet type)
+
+
+The bluetooth addresses are encoded in the reverse order to how
+they're usually written.  So 00:01:02:03:04:05 would be sent over the
+"wire" as:
+	0x05 0x04 0x03 0x02 0x01 0x00
+
+For packets which don't relate to the inner protocol,
+00:00:00:00:00:00 seems to be used instead of the initiating host's
+MAC address.
+
+
+Packet type 0x01: PPP frame (last piece)
+----------------------------------------
+
+Offset		Value
+16		0x01
+17		0x00
+18..		PPP data
+
+The PPP data is raw as it would be transmitted over serial. i.e. it
+includes flag bytes (0x7e at start and end of each PPP packet), PPP
+escaping, and the PPP CRC16 checksum at end of each frame.
+
+Packet type 0x02: "Hello"
+-------------------------
+
+Upon connection, SMA device issues one of these ~once per second,
+until host replies with an identical (?) hello packet.
+
+Offset		Value
+---------------------
+16		0x02
+17		0x00
+18		0x00
+19		0x04
+20		0x70
+21		0x00
+22		0x01
+23		0x00
+24		0x00
+25		0x00
+26		0x00
+27		0x01		NetID???
+28		0x00
+29		0x00
+30		0x00 
+
+Packet type 0x03: GETVAR
+------------------------
+
+Causes device to issue a type 04 packet giving a variable value (?)
+
+Offset		Value
+---------------------
+16		0x03
+17		0x00
+18..19		variable ID (LE16)
+
+Packet type 0x04: VARIABLE
+--------------------------
+
+Offset		Value
+---------------------
+16		0x04
+17		0x00
+18..19		variable ID (LE16)
+20..		variable contents
+
+Variables:
+	Variable 0x00, 0x10, 0x11: Invalid
+		 Causes a type 07 error packet to be issued
+
+	Variable 0x05: Signal Level
+Offset		 Value
+----------------------
+18		0x05
+19		0x00
+20		0x00
+21		0x00
+22		signal level, out of 255
+23		0x00
+
+ID		Meaning		Length
+--------------------------------------
+0x05		signal level	4 bytes
+
+
+
+Packet type 0x05: Unknown
+-------------------------
+
+Packet type 0x07: Error
+-----------------------
+
+Packet type 0x08: PPP frame (not last piece)
+--------------------------------------------
+
+As type 0x01
+
+Packet type 0x0a: Unkown
+------------------------
+
+Packet type 0x0c: Unknown
+-------------------------
+
+
+Inner protocol (PPP protocol 0x6560)
+==============
+
+Offset		Value
+----------------------
+0		Length of packet, in 32-bit words, including (inner) header, but not ppp header??
+1		? A2
+2..7		to address
+8		? B1
+9		? B2
+10..15		from address
+16..17		??? C1,C2
+18..19		error code?
+20..21		packet count for multi packet response
+22..23		LE16, low 15 bits are tag value
+		MSB is "first packet" flag for multi packet response??
+24..25		Packet type
+		LSB is command/response flag
+26..27		Packet subtype
+28..31		Arg 1 (LE)
+32..35		Arg 2 (LE)
+
+
+Command: Total Yield
+--------------------
+
+COMMAND:
+	A2:		A0
+	B1,B2:		00 00
+	C1,C2:		00 00
+	Type:		0200
+	Subtype:	5400
+	Arg1:		0x00260100
+	Arg2:		0x002601ff
+
+RESPONSE:
+	PAYLOAD:
+		0..3	timestamp (LE)
+		4..7	total yield in Wh (LE)
+
+Command: Daily  Yield
+---------------------
+
+COMMAND:
+	A2:		A0
+	B1,B2:		00 00
+	C1,C2:		00 00
+	Type:		0200
+	Subtype:	5400
+	Arg1:		0x00262200
+	Arg2:		0x002622ff
+
+RESPONSE:
+	PAYLOAD:
+		0..3	timestamp (LE)
+		4..7	day's yield in Wh (LE)
+
+Command: Historic data (5 minute intervals)
+-------------------------------------------
+
+COMMAND:
+	A2:		E0
+	B1,B2:		00 00
+	C1,C2:		00 00
+	Type:		0200
+	Subtype:	7000
+	Arg1:		start time
+	Arg2:		end time
+
+RESPONSE:
+	PAYLOAD:
+		0..3	timestamp (LE)
+		4..7	yield in Wh (LE)
+		8..11	unknown
+		PATTERN REPEATS
+
+Command: Historic data (daily intervals)
+----------------------------------------
+
+COMMAND:
+	A2:		E0
+	B1,B2:		00 00
+	C1,C2:		00 00
+	Type:		0200
+	Subtype:	7020
+	Arg1:		start time (unix date, LE)
+	Arg2:		end time (unix date, LE)
+
+RESPONSE:
+	PAYLOAD:
+		0..3	timestamp (unix date, LE)
+		4..7	total yield at that time in Wh (LE)
+		8..11	???
+		...	Pattern repeated
+
+Command: Set time
+-----------------
+
+COMMAND:
+	A2:		A0
+	B1,B2:		00 00
+	C1,C2:		00 00
+	Type:		020A
+	Subtype:	F000
+	Arg1:		0x00236d00
+	Arg2:		0x00236d00
+	PAYLOAD:
+		0..3	00 6D 23 00
+		4..7	timestamp
+		8..11	timestamp (again)
+		12..15	timestamp (again)
+		16..17	localtime offset from UTC in seconds
+		18..19	00 00
+		20..23	30 FE 7E 00
+		24..27	01 00 00 00
+
+RESPONSE:
+	PAYLOAD:
+
+  switch (type)
+    {
+    case EnergyProduction:
+        // SPOT_ETODAY, SPOT_ETOTAL
+        command = 0x54000200;
+        first = 0x00260100;
+        last = 0x002622FF;
+        break;
+
+    case SpotDCPower:
+        // SPOT_PDC1, SPOT_PDC2
+        command = 0x53800200;
+        first = 0x00251E00;
+        last = 0x00251EFF;
+        break;
+
+    case SpotDCVoltage:
+        // SPOT_UDC1, SPOT_UDC2, SPOT_IDC1, SPOT_IDC2
+        command = 0x53800200;
+        first = 0x00451F00;
+        last = 0x004521FF;
+        break;
+
+    case SpotACPower:
+        // SPOT_PAC1, SPOT_PAC2, SPOT_PAC3
+        command = 0x51000200;
+        first = 0x00464000;
+        last = 0x004642FF;
+        break;
+
+    case SpotACVoltage:
+        // SPOT_UAC1, SPOT_UAC2, SPOT_UAC3, SPOT_IAC1, SPOT_IAC2, SPOT_IAC3
+        command = 0x51000200;
+        first = 0x00464800;
+        last = 0x004655FF;
+        break;
+
+    case SpotGridFrequency:
+        // SPOT_FREQ
+        command = 0x51000200;
+        first = 0x00465700;
+        last = 0x004657FF;
+        break;
+
+    case SpotACTotalPower:
+        // SPOT_PACTOT
+        command = 0x51000200;
+        first = 0x00263F00;
+        last = 0x00263FFF;
+        break;
+
+    case TypeLabel:
+        // INV_NAME, INV_TYPE, INV_CLASS
+        command = 0x58000200;
+        first = 0x00821E00;
+        last = 0x008220FF;
+        break;
+
+    case SoftwareVersion:
+        // INV_SWVERSION
+        command = 0x58000200;
+        first = 0x00823400;
+        last = 0x008234FF;
+        break;
+
+    case DeviceStatus:
+        // INV_STATUS
+        command = 0x51800200;
+        first = 0x00214800;
+        last = 0x002148FF;
+        break;
+
+    case GridRelayStatus:
+        // INV_GRIDRELAY
+        command = 0x51800200;
+        first = 0x00416400;
+        last = 0x004164FF;
+        break;
+
+    case OperationTime:
+        // SPOT_OPERTM, SPOT_FEEDTM
+        command = 0x54000200;
+        first = 0x00462E00;
+        last = 0x00462FFF;
+        break;
+
+    case BatteryChargeStatus:
+        command = 0x51000200;
+        first = 0x00295A00;
+        last = 0x00295AFF;
+        break;
+
+    case BatteryInfo:
+        command = 0x51000200;
+        first = 0x00491E00;
+        last = 0x00495DFF;
+        break;
+
+    case InverterTemperature:
+        command = 0x52000200;
+        first = 0x00237700;
+        last = 0x002377FF;
+        break;
+
+    case sbftest:
+        command = 0x64020200;
+        first = 0x00618D00;
+        last = 0x00618DFF;
+        break;
+
+    case MeteringGridMsTotW:
+        command = 0x51000200;
+        first = 0x00463600;
+        last = 0x004637FF;
+        break;
+
+    default:
+        return E_BADARG;
+    };
+
+LC responses 
+
+Daily generation at Sat, 04 Mar 2023 19:31:50 GMT Standard Time: 2670 Wh
+b'\x01"&\x00\xa6\x9c\x03dn\n\x00\x00\x00\x00\x00\x00'
+bytes[4:8] = b’\xa6\x9c\x03d
+bytes [8:12] = b'n\n\x00\x00'
+
+Total generation at Sat, 04 Mar 2023 17:46:11 GMT Standard Time: 31073003 Wh
+b'\x01\x01&\x00\xe3\x83\x03d\xeb"\xda\x01\x00\x00\x00\x00'
+bytes[4:8] = b’\xe3\x83\x03d
+bytes [8:12] =b’\xeb"\xda\x01
+
+
+SpotPower at Sat, 04 Mar 2023 19:31:41 GMT Standard Time: 2147483648 A
+bytearray(b'\x01@F@\x9d\x9c\x03d\x00\x00\x00\x80\x00\x00\x00\x80\x00\x00\x00\x80\x00\x00\x00\x80\x01\x00\x00\x00\x01AF@\x9d\x9c\x03d\x00\x00\x00\x80\x00\x00\x00\x80\x00\x00\x00\x80\x00\x00\x00\x80\x01\x00\x00\x00\x01BF@\x9d\x9c\x03d\x00\x00\x00\x80\x00\x00\x00\x80\x00\x00\x00\x80\x00\x00\x00\x80\x01\x00\x00\x00')
+bytes[4:8] = b’\x9d\x9c\x03d’
+bytes[16:20] = b’\x00\x00\x00\x80\’
+
