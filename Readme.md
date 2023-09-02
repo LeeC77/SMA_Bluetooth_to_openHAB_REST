@@ -127,7 +127,7 @@ Copy the Python files to a subdirectory in your home directory. From this direct
 
 <https://pyinstaller.org/en/stable/usage.html#options>
 
-As pyinstaller will have be installed here: /home/openhabian/.local/bin/pyinstaller, the following example with absolute  directory paths will build a standalone executable called openhabsma. The executable can be found in the dist directory created during the build.
+As pyinstaller will have been installed here: /home/openhabian/.local/bin/pyinstaller, the following example with absolute  directory paths will build a standalone executable called openhabsma. The executable can be found in the dist directory created during the build.
 ```
 /home/openhabian/.local/bin/pyinstaller --onefile main.py -n openhabsma
 ```
